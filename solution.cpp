@@ -9,7 +9,6 @@ int n, m, k;
 vector<vector<pair<int, double>>> graph;
 vector<int> landmarks;
 vector<vector<double>> dist_matrix;
-vector<int> best_day_order;
 
 struct State {
     double dist;
@@ -149,7 +148,7 @@ int main() {
     
     graph.resize(n + 1);
     
-    for (int i = 0; i < n; i++) {
+    for (int i = 1; i <= n; i++) {
         double lat, lon;
         cin >> lat >> lon;
     }
