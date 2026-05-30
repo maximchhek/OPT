@@ -18,10 +18,11 @@ struct State {
     }
 };
 
-void dijkstra(int start, vector<double>& dist) {
+void dijkstra(int start, vector<double>& dist, vector<int>& parent) {
     fill(dist.begin(), dist.end(), INF);
-    priority_queue<State, vector<State>, greater<State>> pq;
+    fill(parent.begin(), parent.end(), -1);
     
+    priority_queue<State, vector<State>, greater<State>> pq;
     dist[start] = 0;
     pq.push({0, start});
     
@@ -35,6 +36,7 @@ void dijkstra(int start, vector<double>& dist) {
             double new_dist = dist[u] + w;
             if (new_dist < dist[v] - EPS) {
                 dist[v] = new_dist;
+                parent[v] = u;
                 pq.push({new_dist, v});
             }
         }
@@ -43,101 +45,137 @@ void dijkstra(int start, vector<double>& dist) {
 
 void build_landmark_distances() {
     vector<double> temp_dist(n + 1);
+    vector<int> temp_parent(n + 1);
     
     for (int i = 0; i < k; i++) {
-        dijkstra(landmarks[i], temp_dist);
+        dijkstra(landmarks[i], temp_dist, temp_parent);
         for (int j = 0; j < k; j++) {
             dist_matrix[i][j] = temp_dist[landmarks[j]];
         }
     }
 }
 
-pair<int, vector<pair<int, int>>> solve() {
-    if (k == 0) return {0, {}};
-    
-    build_landmark_distances();
-    
-    vector<int> dp(1 << k, INT_MAX);
-    vector<pair<int, int>> parent(1 << k, {-1, -1});
-    
-    dp[0] = 0;
-    int full_mask = (1 << k) - 1;
-    
-    for (int mask = 0; mask <= full_mask; mask++) {
-        if (dp[mask] == INT_MAX) continue;
-        
-        for (int start = 0; start < k; start++) {
-            if (mask & (1 << start)) continue;
-            
-            int reachable = 0;
-            for (int j = 0; j < k; j++) {
-                if (dist_matrix[start][j] <= MAX_DISTANCE + EPS) {
-                    reachable |= (1 << j);
-                }
-            }
-            
-            for (int submask = reachable; submask > 0; submask = (submask - 1) & reachable) {
-                if (submask & (1 << start)) {
-                    int new_mask = mask | submask;
-                    int new_cost = dp[mask] + 1;
-                    if (new_cost < dp[new_mask]) {
-                        dp[new_mask] = new_cost;
-                        parent[new_mask] = {mask, start};
-                    }
-                }
-            }
-        }
-    }
-    
-    vector<pair<int, int>> routes;
-    int current_mask = full_mask;
-    
-    while (current_mask > 0) {
-        auto [prev_mask, start_landmark] = parent[current_mask];
-        int day_mask = current_mask ^ prev_mask;
-        routes.push_back({start_landmark, day_mask});
-        current_mask = prev_mask;
-    }
-    
-    reverse(routes.begin(), routes.end());
-    return {dp[full_mask], routes};
-}
-
-vector<int> reconstruct_path(int start_node, int end_node, vector<double>& dist, vector<int>& par) {
-    if (start_node == end_node) return {start_node};
-    
-    fill(dist.begin(), dist.end(), INF);
-    fill(par.begin(), par.end(), -1);
-    
-    priority_queue<State, vector<State>, greater<State>> pq;
-    dist[start_node] = 0;
-    pq.push({0, start_node});
-    
-    while (!pq.empty()) {
-        auto [d, u] = pq.top();
-        pq.pop();
-        
-        if (u == end_node) break;
-        if (d > dist[u] + EPS) continue;
-        
-        for (auto& [v, w] : graph[u]) {
-            double new_dist = dist[u] + w;
-            if (new_dist < dist[v] - EPS) {
-                dist[v] = new_dist;
-                par[v] = u;
-                pq.push({new_dist, v});
-            }
-        }
-    }
-    
+vector<int> reconstruct_path(int start_node, int end_node, const vector<int>& parent) {
     vector<int> path;
     int current = end_node;
     while (current != -1) {
         path.push_back(current);
-        current = par[current];
+        current = parent[current];
     }
     reverse(path.begin(), path.end());
     return path;
+}
+
+vector<vector<int>> solve_greedy() {
+    if (k == 0) return {};
+    
+    build_landmark_distances();
+    
+    vector<bool> visited(k, false);
+    vector<vector<int>> daily_routes;
+    
+    while (true) {
+        bool all_visited = true;
+        for (int i = 0; i < k; i++) {
+            if (!visited[i]) {
+                all_visited = false;
+                break;
+            }
+        }
+        if (all_visited) break;
+        
+        int best_start = -1;
+        vector<int> best_day_landmarks;
+        int best_day_cost = INT_MAX;
+        
+        for (int start = 0; start < k; start++) {
+            if (visited[start]) continue;
+            
+            vector<pair<double, int>> candidates;
+            for (int j = 0; j < k; j++) {
+                if (!visited[j]) {
+                    candidates.push_back({dist_matrix[start][j], j});
+                }
+            }
+            sort(candidates.begin(), candidates.end());
+            
+            vector<int> day_landmarks;
+            double current_dist = 0;
+            int current_idx = start;
+            day_landmarks.push_back(start);
+            
+            for (auto [d, idx] : candidates) {
+                if (idx == start) continue;
+                if (current_dist + dist_matrix[current_idx][idx] <= MAX_DISTANCE + EPS) {
+                    day_landmarks.push_back(idx);
+                    current_dist += dist_matrix[current_idx][idx];
+                    current_idx = idx;
+                }
+            }
+            
+            if ((int)day_landmarks.size() < (int)best_day_landmarks.size() || 
+                ((int)day_landmarks.size() == (int)best_day_landmarks.size() && best_start == -1)) {
+                if ((int)day_landmarks.size() > (int)best_day_landmarks.size()) {
+                    best_start = start;
+                    best_day_landmarks = day_landmarks;
+                } else if (best_start == -1) {
+                    best_start = start;
+                    best_day_landmarks = day_landmarks;
+                }
+            }
+        }
+        
+        if (best_start == -1) {
+            for (int i = 0; i < k; i++) {
+                if (!visited[i]) {
+                    best_start = i;
+                    best_day_landmarks.push_back(i);
+                    break;
+                }
+            }
+        }
+        
+        for (int idx : best_day_landmarks) {
+            visited[idx] = true;
+        }
+        
+        sort(best_day_landmarks.begin() + 1, best_day_landmarks.end(),
+             [best_start](int a, int b) {
+                 return dist_matrix[best_start][a] < dist_matrix[best_start][b];
+             });
+        
+        vector<int> path;
+        path.push_back(landmarks[best_day_landmarks[0]]);
+        
+        vector<double> temp_dist(n + 1);
+        vector<int> temp_parent(n + 1);
+        
+        for (size_t i = 1; i < best_day_landmarks.size(); i++) {
+            int prev_idx = best_day_landmarks[i - 1];
+            int next_idx = best_day_landmarks[i];
+            
+            dijkstra(landmarks[prev_idx], temp_dist, temp_parent);
+            vector<int> segment = reconstruct_path(landmarks[next_idx], landmarks[next_idx], temp_parent);
+            
+            if (segment.empty() || segment[0] != landmarks[next_idx]) {
+                segment = {landmarks[next_idx]};
+            }
+            
+            if (path.back() != segment[0]) {
+                dijkstra(path.back(), temp_dist, temp_parent);
+                segment = reconstruct_path(landmarks[next_idx], landmarks[next_idx], temp_parent);
+                if (segment.empty()) segment = {landmarks[next_idx]};
+            }
+            
+            for (size_t j = (path.back() == segment[0] ? 1 : 0); j < segment.size(); j++) {
+                path.push_back(segment[j]);
+            }
+        }
+        
+        daily_routes.push_back(path);
+    }
+    
+    return daily_routes;
 }
 
 int main() {
@@ -174,50 +212,14 @@ int main() {
     
     dist_matrix.assign(k, vector<double>(k, 0));
     
-    auto [min_days, routes] = solve();
+    vector<vector<int>> daily_routes = solve_greedy();
     
-    cout << min_days << "\n";
-    
-    vector<double> temp_dist(n + 1);
-    vector<int> temp_par(n + 1);
-    
-    for (auto [start_landmark_idx, day_mask] : routes) {
-        vector<int> day_indices;
-        
-        for (int i = 0; i < k; i++) {
-            if (day_mask & (1 << i)) {
-                day_indices.push_back(i);
-            }
-        }
-        
-        sort(day_indices.begin(), day_indices.end(), 
-             [start_landmark_idx](int a, int b) {
-                 return dist_matrix[start_landmark_idx][a] < dist_matrix[start_landmark_idx][b];
-             });
-        
-        int current_node = landmarks[start_landmark_idx];
-        vector<int> path;
-        path.push_back(current_node);
-        
-        for (int idx : day_indices) {
-            if (idx == start_landmark_idx) continue;
-            
-            int next_node = landmarks[idx];
-            if (current_node == next_node) continue;
-            
-            vector<int> segment = reconstruct_path(current_node, next_node, temp_dist, temp_par);
-            
-            for (size_t i = 1; i < segment.size(); i++) {
-                path.push_back(segment[i]);
-            }
-            
-            current_node = next_node;
-        }
-        
-        cout << path.size() << "\n";
-        for (size_t i = 0; i < path.size(); i++) {
+    cout << daily_routes.size() << "\n";
+    for (const auto& route : daily_routes) {
+        cout << route.size() << "\n";
+        for (size_t i = 0; i < route.size(); i++) {
             if (i > 0) cout << " ";
-            cout << path[i];
+            cout << route[i];
         }
         cout << "\n";
     }
