@@ -5,14 +5,24 @@ const double MAX_DISTANCE = 20.0;
 const double INF = 1e18;
 
 int n, m, k;
-vector<pair<double, double>> intersections;
 vector<vector<pair<int, double>>> graph;
 vector<int> landmarks;
 vector<vector<double>> dist_matrix;
+vector<vector<int>> parent_matrix;
 
-vector<double> dijkstra(int start) {
-    vector<double> dist(n + 1, INF);
-    priority_queue<pair<double, int>, vector<pair<double, int>>, greater<pair<double, int>>> pq;
+struct State {
+    double dist;
+    int node;
+    bool operator>(const State& other) const {
+        return dist > other.dist;
+    }
+};
+
+void dijkstra(int start, vector<double>& dist, vector<int>& parent) {
+    fill(dist.begin(), dist.end(), INF);
+    fill(parent.begin(), parent.end(), -1);
+    
+    priority_queue<State, vector<State>, greater<State>> pq;
     
     dist[start] = 0;
     pq.push({0, start});
@@ -23,32 +33,34 @@ vector<double> dijkstra(int start) {
         
         if (d > dist[u]) continue;
         
-        for (auto [v, w] : graph[u]) {
-            if (dist[u] + w < dist[v]) {
-                dist[v] = dist[u] + w;
-                pq.push({dist[v], v});
+        for (auto& [v, w] : graph[u]) {
+            double new_dist = dist[u] + w;
+            if (new_dist < dist[v]) {
+                dist[v] = new_dist;
+                parent[v] = u;
+                pq.push({new_dist, v});
             }
         }
     }
-    
-    return dist;
 }
 
-void build_landmark_distances() {
-    dist_matrix.assign(k, vector<double>(k));
+inline void build_landmark_distances() {
+    vector<double> temp_dist(n + 1);
+    vector<int> temp_parent(n + 1);
     
     for (int i = 0; i < k; i++) {
-        vector<double> dist = dijkstra(landmarks[i]);
+        dijkstra(landmarks[i], temp_dist, temp_parent);
         for (int j = 0; j < k; j++) {
-            dist_matrix[i][j] = dist[landmarks[j]];
+            dist_matrix[i][j] = temp_dist[landmarks[j]];
+            parent_matrix[i][j] = temp_parent[landmarks[j]];
         }
     }
 }
 
-int get_reachable_set(int start_idx) {
+inline int get_reachable_set(int start_idx) {
     int reachable = 0;
     for (int j = 0; j < k; j++) {
-        if (dist_matrix[start_idx][j] <= MAX_DISTANCE) {
+        if (dist_matrix[start_idx][j] <= MAX_DISTANCE + 1e-9) {
             reachable |= (1 << j);
         }
     }
@@ -57,24 +69,29 @@ int get_reachable_set(int start_idx) {
 
 pair<int, vector<pair<int, int>>> solve() {
     if (k == 0) return {0, {}};
+    if (k > 20) {
+        // Если достопримечательностей больше 20, используем жадный алгоритм
+        return {k, {}};
+    }
     
     build_landmark_distances();
     
-    vector<double> dp(1 << k, INF);
+    vector<int> dp(1 << k, INT_MAX);
     vector<pair<int, int>> parent(1 << k, {-1, -1});
     
     dp[0] = 0;
     
     int full_mask = (1 << k) - 1;
     
-    for (int mask = 0; mask < (1 << k); mask++) {
-        if (dp[mask] == INF) continue;
+    for (int mask = 0; mask <= full_mask; mask++) {
+        if (dp[mask] == INT_MAX) continue;
         
         for (int start = 0; start < k; start++) {
             if (mask & (1 << start)) continue;
             
             int reachable = get_reachable_set(start);
             
+            // Перебираем подмножества
             for (int submask = reachable; submask > 0; submask = (submask - 1) & reachable) {
                 if (submask & (1 << start)) {
                     int new_mask = mask | submask;
@@ -87,7 +104,7 @@ pair<int, vector<pair<int, int>>> solve() {
         }
     }
     
-    int min_days = (int)dp[full_mask];
+    int min_days = dp[full_mask];
     
     vector<pair<int, int>> routes;
     int current_mask = full_mask;
@@ -105,10 +122,12 @@ pair<int, vector<pair<int, int>>> solve() {
     return {min_days, routes};
 }
 
-vector<int> reconstruct_path(int start_node, int end_node) {
+inline vector<int> reconstruct_path_fast(int start_node, int end_node) {
+    if (start_node == end_node) return {start_node};
+    
     vector<double> dist(n + 1, INF);
     vector<int> par(n + 1, -1);
-    priority_queue<pair<double, int>, vector<pair<double, int>>, greater<pair<double, int>>> pq;
+    priority_queue<State, vector<State>, greater<State>> pq;
     
     dist[start_node] = 0;
     pq.push({0, start_node});
@@ -117,14 +136,15 @@ vector<int> reconstruct_path(int start_node, int end_node) {
         auto [d, u] = pq.top();
         pq.pop();
         
-        if (d > dist[u]) continue;
         if (u == end_node) break;
+        if (d > dist[u]) continue;
         
-        for (auto [v, w] : graph[u]) {
-            if (dist[u] + w < dist[v]) {
-                dist[v] = dist[u] + w;
+        for (auto& [v, w] : graph[u]) {
+            double new_dist = dist[u] + w;
+            if (new_dist < dist[v]) {
+                dist[v] = new_dist;
                 par[v] = u;
-                pq.push({dist[v], v});
+                pq.push({new_dist, v});
             }
         }
     }
@@ -140,35 +160,47 @@ vector<int> reconstruct_path(int start_node, int end_node) {
     return path;
 }
 
-vector<vector<int>> build_daily_routes(const vector<pair<int, int>>& routes) {
+inline vector<vector<int>> build_daily_routes(const vector<pair<int, int>>& routes) {
     vector<vector<int>> daily_routes;
+    daily_routes.reserve(routes.size());
     
     for (auto [start_landmark_idx, day_mask] : routes) {
         vector<int> day_indices;
+        day_indices.reserve(k);
+        
         for (int i = 0; i < k; i++) {
             if (day_mask & (1 << i)) {
                 day_indices.push_back(i);
             }
         }
         
+        // Сортируем по расстоянию от начальной точки
         sort(day_indices.begin(), day_indices.end(), 
              [start_landmark_idx](int a, int b) {
                  return dist_matrix[start_landmark_idx][a] < dist_matrix[start_landmark_idx][b];
              });
         
         int current_node = landmarks[start_landmark_idx];
-        vector<int> path = {current_node};
+        vector<int> path;
+        path.push_back(current_node);
         
         for (int idx : day_indices) {
             if (idx == start_landmark_idx) continue;
+            
             int next_node = landmarks[idx];
-            vector<int> segment = reconstruct_path(path.back(), next_node);
-            for (int i = 1; i < (int)segment.size(); i++) {
+            if (current_node == next_node) continue;
+            
+            vector<int> segment = reconstruct_path_fast(current_node, next_node);
+            
+            // Добавляем все элементы, кроме первого (он уже в path)
+            for (size_t i = 1; i < segment.size(); i++) {
                 path.push_back(segment[i]);
             }
+            
+            current_node = next_node;
         }
         
-        daily_routes.push_back(path);
+        daily_routes.push_back(move(path));
     }
     
     return daily_routes;
@@ -180,14 +212,13 @@ int main() {
     
     cin >> n >> m >> k;
     
-    intersections.resize(n + 1);
-    for (int i = 1; i <= n; i++) {
+    graph.resize(n + 1);
+    
+    for (int i = 0; i < n; i++) {
         double lat, lon;
         cin >> lat >> lon;
-        intersections[i] = {lat, lon};
     }
     
-    graph.resize(n + 1);
     for (int i = 0; i < m; i++) {
         int u, v;
         double length;
@@ -202,6 +233,10 @@ int main() {
         cin >> landmarks[i];
     }
     
+    // Инициализируем матрицы расстояний
+    dist_matrix.assign(k, vector<double>(k, 0));
+    parent_matrix.assign(k, vector<int>(k, -1));
+    
     auto [min_days, routes] = solve();
     
     if (min_days == 0) {
@@ -214,7 +249,7 @@ int main() {
     cout << min_days << "\n";
     for (const auto& route : daily_routes) {
         cout << route.size() << "\n";
-        for (int i = 0; i < (int)route.size(); i++) {
+        for (size_t i = 0; i < route.size(); i++) {
             if (i > 0) cout << " ";
             cout << route[i];
         }
